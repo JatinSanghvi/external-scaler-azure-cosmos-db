@@ -18,7 +18,6 @@ namespace Keda.CosmosDb.Scaler.Demo.OrderProcessor
                 .ConfigureServices((hostContext, services) =>
                 {
                     services.AddHostedService<Worker>();
-                    services.AddSingleton(CosmosDbConfig.Create(hostContext.Configuration));
                 });
     }
 }

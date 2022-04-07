@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Keda.CosmosDb.Scaler.Demo.Shared;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -14,13 +17,20 @@ namespace Keda.CosmosDb.Scaler.Demo.OrderProcessor
     {
         private readonly CosmosDbConfig _cosmosDbConfig;
         private readonly ILogger<Worker> _logger;
+        private readonly HttpClient _httpClient;
+        private readonly Uri _apiUri;
 
         private ChangeFeedProcessor _processor;
 
-        public Worker(CosmosDbConfig cosmosDbConfig, ILogger<Worker> logger)
+        public Worker(IConfiguration configuration, ILogger<Worker> logger)
         {
-            _cosmosDbConfig = cosmosDbConfig ?? throw new ArgumentNullException(nameof(cosmosDbConfig));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _ = configuration ?? throw new ArgumentNullException(nameof(configuration));
+            _ = logger ?? throw new ArgumentNullException(nameof(logger));
+
+            _cosmosDbConfig = CosmosDbConfig.Create(configuration);
+            _logger = logger;
+            _httpClient = new HttpClient();
+            _apiUri = new Uri(configuration["HttpApplicationApiUrl"]);
         }
 
         public override async Task StartAsync(CancellationToken stoppingToken)
@@ -68,9 +78,27 @@ namespace Keda.CosmosDb.Scaler.Demo.OrderProcessor
             {
                 _logger.LogInformation($"Processing order {order.Id} - {order.Amount} unit(s) of {order.Article} bought by {order.Customer.FirstName} {order.Customer.LastName}");
 
-                // Add delay to fake the time consumed in processing the order.
-                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
-                _logger.LogInformation($"Order {order.Id} processed");
+                NameValueCollection query = System.Web.HttpUtility.ParseQueryString(string.Empty);
+                query.Add("quantity", $"{order.Amount}");
+                query.Add("price", $"{(10 - order.Amount) * 2}"); // Article prices are not stored in container.
+                query.Add("customer_name", $"{order.Customer.FirstName} {order.Customer.LastName}");
+                query.Add("article_name", order.Article);
+
+                Uri requestUri = new UriBuilder(_apiUri) { Query = query.ToString() }.Uri;
+                _logger.LogInformation($"Sending request: {requestUri}.");
+
+                try
+                {
+                    HttpResponseMessage response = await _httpClient.GetAsync(requestUri);
+                    response.EnsureSuccessStatusCode();
+                    string content = await response.Content.ReadAsStringAsync();
+                    _logger.LogInformation($"Received response: {content}");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"Request failed with exception: {ex.Message}");
+                    throw;
+                }
             }
         }
     }
